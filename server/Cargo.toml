@@ -1,0 +1,16 @@
+[package]
+name = "server"
+version = "0.1.1"
+edition = "2021"
+
+[profile.release]
+debug = 1
+
+[features]
+dhat-heap = []
+dhat-ad-hoc = []
+
+[dependencies]
+dhat = "0.3.3"
+ironlog_core = { path = "../core", package = "core" }
+walkdir = "2.5.0"
