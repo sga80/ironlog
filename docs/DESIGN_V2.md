@@ -88,6 +88,14 @@ worker can multiplex multiple connections concurrently on the same thread. This 
 be wrapped in `Rc<RefCell<>>` so tasks can borrow the commit logger without moving it. Ordering guarantees for
 concurrent writes to the same channel will also need to be considered at that point.
 
+### Consumer Group Offset Tracking
+
+IronLog does not track consumer offsets — this is a deliberate design decision. Consumers are responsible for persisting their own position (last consumed offset) and passing it on the next request. The broker is pure storage.
+
+A future version could optionally add broker-side offset tracking similar to Kafka's `__consumer_offsets` internal topic, where the broker stores `(group_id, channel, offset)` on behalf of consumers. This would allow consumer groups, coordinated rebalancing, and seamless restarts without the consumer managing state. The tradeoff is broker complexity — the broker would own two concerns instead of one.
+
+**TODO (future version):** Broker-side consumer group offset storage as an opt-in feature, keeping the stateless consumer path as the default.
+
 ## Next Version
 
 ### Repo Cleanup — Separate CLI Repos
