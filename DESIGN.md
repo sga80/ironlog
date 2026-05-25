@@ -4,17 +4,19 @@ A single-node log broker inspired by Apache Kafka, built in Rust.
 
 ## Version Roadmap
 
-Each version is benchmarked against the Alibaba Cloud block storage traces and results are documented in `benchmarks/vX.md`. Versions are tagged in git (`v1.0`, `v2.0`, etc.) so the baseline for each phase is reproducible.
+Each version is benchmarked against the Alibaba Cloud block storage traces and results are documented in
+`benchmarks/vX.md`. Versions are tagged in git (`v1.0`, `v2.0`, etc.) so the baseline for each phase is reproducible.
 
-| Version | Focus | Key Concepts |
-|---------|-------|--------------|
-| **v1** | Single-node, synchronous | Wire protocol, commit log, producer, consumer |
-| **v2** | Async | Tokio, concurrent connections, non-blocking I/O |
-| **v3** | Replication | Leader/follower, HA, consistency guarantees |
-| **v4** | Producer batching | Throughput optimization, batch Acks |
-| **v5** | Zero-copy write path | `splice()`, kernel page cache, unsafe Rust |
+| Version | Focus                    | Key Concepts                                    |
+|---------|--------------------------|-------------------------------------------------|
+| **v1**  | Single-node, synchronous | Wire protocol, commit log, producer, consumer   |
+| **v2**  | Async                    | Tokio, concurrent connections, non-blocking I/O |
+| **v3**  | Replication              | Leader/follower, HA, consistency guarantees     |
+| **v4**  | Producer batching        | Throughput optimization, batch Acks             |
+| **v5**  | Zero-copy write path     | `splice()`, kernel page cache, unsafe Rust      |
 
-Each version builds on the previous — no async until the synchronous baseline is understood, no replication until concurrency is solid. Benchmark numbers drive decisions rather than speculation.
+Each version builds on the previous — no async until the synchronous baseline is understood, no replication until
+concurrency is solid. Benchmark numbers drive decisions rather than speculation.
 
 ## Actors
 
@@ -31,18 +33,27 @@ Each version builds on the previous — no async until the synchronous baseline 
 
 ## TODO: Zero-Copy Write Path
 
-Currently the payload is read from the network socket into a `Vec<u8>` in user space, then written to disk — two kernel/user space transitions. 
+Currently the payload is read from the network socket into a `Vec<u8>` in user space, then written to disk — two
+kernel/user space transitions.
 
-A future optimization is to use the Linux `splice()` syscall to move the payload directly from the network socket to the disk file entirely within kernel space, bypassing user space. The wire frame header fields (length, request type, payload type, channel name) must still be read through user space to determine routing and payload size, but the payload itself can be zero-copy.
+A future optimization is to use the Linux `splice()` syscall to move the payload directly from the network socket to the
+disk file entirely within kernel space, bypassing user space. The wire frame header fields (length, request type,
+payload type, channel name) must still be read through user space to determine routing and payload size, but the payload
+itself can be zero-copy.
 
-This requires unsafe Rust via the `libc` crate and is Linux-only. Implement after the full producer → broker → consumer flow is working.
+This requires unsafe Rust via the `libc` crate and is Linux-only. Implement after the full producer → broker → consumer
+flow is working.
 
 **Risks and constraints when implementing:**
 
-- **Partial writes**: `splice()` can transfer fewer bytes than requested. Must loop until all bytes are transferred — a partial write silently corrupts the commit log record.
-- **Pipe buffer size**: `splice()` requires an intermediary pipe. The default pipe buffer is 64KB. Payloads exceeding this require multiple `splice()` calls, increasing the chance of partial write bugs.
-- **File descriptor leaks**: errors during `splice()` must be handled carefully to ensure pipe fds are always closed. Leaked fds in a long-running broker will exhaust the OS fd limit and cause the server to stop accepting connections.
-- **Kernel attack surface**: `splice()` operates directly on the page cache. IronLog must run as a non-privileged user — never as root — to limit exposure.
+- **Partial writes**: `splice()` can transfer fewer bytes than requested. Must loop until all bytes are transferred — a
+  partial write silently corrupts the commit log record.
+- **Pipe buffer size**: `splice()` requires an intermediary pipe. The default pipe buffer is 64KB. Payloads exceeding
+  this require multiple `splice()` calls, increasing the chance of partial write bugs.
+- **File descriptor leaks**: errors during `splice()` must be handled carefully to ensure pipe fds are always closed.
+  Leaked fds in a long-running broker will exhaust the OS fd limit and cause the server to stop accepting connections.
+- **Kernel attack surface**: `splice()` operates directly on the page cache. IronLog must run as a non-privileged user —
+  never as root — to limit exposure.
 - **Non-portable**: Linux-only. Guard with `#[cfg(target_os = "linux")]`.
 
 ## Client Protocol
@@ -54,42 +65,47 @@ This requires unsafe Rust via the `libc` crate and is Linux-only. Implement afte
 
 ### Connection Handshake
 
-When a client connects, it immediately sends a 2-byte request type to identify itself:
+When a client connects, it immediately sends the channel name followed by the request type:
 
 ```
-| 2 bytes: request type |
+| 1 byte: channel name length | M bytes: channel name | 2 bytes: request type |
 ```
 
-The broker reads this once per connection and routes to the appropriate handler. All subsequent frames on the connection omit the request type — it is a connection-level identifier, not a per-message field.
+The broker reads this once per connection. The channel name comes first so the broker can route the connection to the
+correct core before reading the request type — this enables channel affinity routing in the thread-per-core model. The
+request type identifies the connection as a producer or consumer. All subsequent frames omit both fields — they are
+connection-level identifiers, not per-message fields.
 
 ### Producer Frame
 
 Sent by producers after the handshake, once per message:
 
 ```
-| 4 bytes: length | 2 bytes: payload type | 1 byte: channel name length | M bytes: channel name | N bytes: payload |
+| 4 bytes: length | 2 bytes: payload type | N bytes: payload |
 ```
 
-- **length** (`u32`): number of bytes in the payload (N only, does not include header or channel name)
+- **length** (`u32`): number of bytes in the payload (N only, does not include header)
 - **payload type** (`u16`): the format of the payload data
-- **channel name length** (`u8`): number of bytes in the channel name (M)
-- **channel name** (`[u8; M]`): UTF-8 encoded channel name
+
+The channel name is not repeated — it was established in the handshake and is connection-scoped.
 
 ### Consumer Frame
 
 Sent by consumers after the handshake to initiate a fetch:
 
 ```
-| 1 byte: channel name length | M bytes: channel name | 8 bytes: offset |
+| 8 bytes: offset |
 ```
 
-- **channel name length** (`u8`): number of bytes in the channel name (M)
-- **channel name** (`[u8; M]`): UTF-8 encoded channel name
-- **offset** (`u64`): the offset to start reading from. `0` means start from the beginning — offset 0 and "start from beginning" are identical, so no separate flag is needed
+- **offset** (`u64`): the offset to start reading from. `0` means start from the beginning — offset 0 and "start from
+  beginning" are identical, so no separate flag is needed
+
+The channel name is not repeated — it was established in the handshake and is connection-scoped.
 
 ### Consumer Result
 
-Streamed by the broker to the consumer, one record at a time, until all available records are sent. The broker closes the connection when done (fetch-and-close).
+Streamed by the broker to the consumer, one record at a time, until all available records are sent. The broker closes
+the connection when done (fetch-and-close).
 
 ```
 | 8 bytes: offset | 8 bytes: timestamp | 2 bytes: payload type | 4 bytes: payload length | N bytes: payload |
@@ -101,15 +117,16 @@ Streamed by the broker to the consumer, one record at a time, until all availabl
 - **payload length** (`u32`): number of bytes in the payload
 - **payload** (`[u8; N]`): the raw message data
 
-Note: the `ConsumerResult` wire format mirrors the on-disk record format intentionally — in a future zero-copy read path, records can be sent directly from the page cache without transformation.
+Note: the `ConsumerResult` wire format mirrors the on-disk record format intentionally — in a future zero-copy read
+path, records can be sent directly from the page cache without transformation.
 
 ### Request Types
 
-| Code | Name | Description |
-|------|------|-------------|
-| `0x0001` | Produce | Client sending a message to the broker |
-| `0x0002` | Fetch | Consumer requesting messages from the broker |
-| `0x0003` | Ack | Broker confirming receipt of a message |
+| Code     | Name    | Description                                  |
+|----------|---------|----------------------------------------------|
+| `0x0001` | Produce | Client sending a message to the broker       |
+| `0x0002` | Fetch   | Consumer requesting messages from the broker |
+| `0x0003` | Ack     | Broker confirming receipt of a message       |
 
 ### Ack Response Frame
 
@@ -126,8 +143,8 @@ After a successful Produce, the broker sends back:
 
 ### Payload Types
 
-| Code | Name | Description |
-|------|------|-------------|
-| `0x0001` | Text | Plain UTF-8 text |
-| `0x0002` | JSON | JSON encoded data |
-| `0x0003` | Binary | Raw binary data |
+| Code     | Name   | Description       |
+|----------|--------|-------------------|
+| `0x0001` | Text   | Plain UTF-8 text  |
+| `0x0002` | JSON   | JSON encoded data |
+| `0x0003` | Binary | Raw binary data   |

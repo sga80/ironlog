@@ -1,2 +1,14 @@
 /target
 Cargo.lock
+
+# CDK contains AWS account-specific config — not checked in
+cdk/
+
+# Large data files
+data/
+
+# Helm charts — deployment config managed separately
+helm/
+
+# Makefile contains account-specific ECR/AWS config
+Makefile

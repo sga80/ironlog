@@ -1,26 +1,21 @@
 use crate::common::{PayloadType, RequestType, WriteStatus};
-use std::io::Read;
-use std::net::TcpStream;
+use compio::io::AsyncReadExt;
+use compio::net::TcpStream;
+use compio::BufResult;
 
 #[derive(Clone, Debug)]
 pub struct ProducerFrame {
     pub payload_type: PayloadType,
-    channel_name: String,
     payload: Vec<u8>,
 }
 
 
 impl ProducerFrame {
-    pub fn new(payload_type: PayloadType, channel_name: String, payload: Vec<u8>) -> Self {
+    pub fn new(payload_type: PayloadType, payload: Vec<u8>) -> Self {
         ProducerFrame {
             payload_type,
-            channel_name,
             payload,
         }
-    }
-
-    pub fn channel_name(&self) -> &str {
-        &self.channel_name
     }
     pub fn payload(&self) -> &[u8] {
         &self.payload
@@ -31,39 +26,22 @@ impl ProducerFrame {
 
         bytes.extend_from_slice(&(self.payload.len() as u32).to_be_bytes()); // 4 bytes
         bytes.extend_from_slice(&(self.payload_type as u16).to_be_bytes());  // 2 bytes
-        bytes.push(self.channel_name.len() as u8); // 1 byte
-        bytes.extend_from_slice(self.channel_name.as_bytes());
         bytes.extend_from_slice(&self.payload);
 
         bytes
     }
 
-    pub fn from_bytes(tcp_stream: &mut TcpStream) -> std::io::Result<Self> {
-        // 2 bytes: request type | | 4 bytes: payload_length |2 bytes: payload type | 1 byte: channel name length | M bytes: channel name | N bytes: payload |
+    pub async fn from_bytes(tcp_stream: &mut TcpStream) -> std::io::Result<Self> {
+        //| 4 bytes: length | 2 bytes: payload type | N bytes: payload |
         // 1) read the first bytes to get the length
-        let mut buf = [0u8; 4]; // this creates a slice with 4 elements all initialized to 0 of type unsigned int 8 bits as  u8 which is a byte
-        tcp_stream.read_exact(&mut buf)?;
-        let payload_length = u32::from_be_bytes(buf); // we are using big endian here to represent u32 over the wire. we could also use little endian but BE is easier to read left to write
-
-        let mut buf = [0; 2]; // now initialize a slice with 2 bytes
-        tcp_stream.read_exact(&mut buf)?;
-        let payload_type = u16::from_be_bytes(buf); // read the next 2 bytes as payload type
+        let payload_length = tcp_stream.read_u32().await?; // we are using big endian here to represent u32 over the wire. we could also use little endian but BE is easier to read left to write
+        let payload_type = tcp_stream.read_u16().await?; // read the next 2 bytes as payload type
         let payload_type = PayloadType::try_from(payload_type)?;
-
-        let mut buf = [0; 1]; // now initialize a slice with 1 byte
-        tcp_stream.read_exact(&mut buf)?;
-        let channel_name_length = buf[0];
-
-        let mut buf = vec![0; channel_name_length as usize];
-        tcp_stream.read_exact(&mut buf)?;
-        let channel_name = str::from_utf8(&buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        let mut payload = vec![0u8; payload_length as usize];
-        tcp_stream.read_exact(&mut payload)?;
-
+        let payload = Vec::with_capacity(payload_length as usize);
+        let BufResult(res, payload) = tcp_stream.read_exact(payload).await;
+        res?; //propagate the error
         Ok(Self {
             payload_type,
-            channel_name: channel_name.to_string(),
             payload,
         })
     }
@@ -89,25 +67,14 @@ impl ProducerResult {
         bytes
     }
 
-    pub fn from_bytes(tcp_stream: &mut TcpStream) -> std::io::Result<Self> {
+    pub async fn from_bytes(tcp_stream: &mut TcpStream) -> std::io::Result<Self> {
         // | 2 bytes: request type | 1 byte: status | 8 bytes: offset | 8 bytes: timestamp |
-        let mut buf = [0u8; 2]; // create a slice of u8 with 2 elements which is 2 bytes
-        tcp_stream.read_exact(&mut buf)?;
-        let request_type = u16::from_be_bytes(buf);
+        let request_type = tcp_stream.read_u16().await?;
         let request_type = RequestType::try_from(request_type)?;
-
-        let mut buf = [0u8; 1]; // create a slice of one byte
-        tcp_stream.read_exact(&mut buf)?;
-        let write_status = buf[0];
+        let write_status = tcp_stream.read_u8().await?;
         let write_status = WriteStatus::try_from(write_status)?;
-
-        let mut buf = [0u8; 8];
-        tcp_stream.read_exact(&mut buf)?;
-        let offset = u64::from_be_bytes(buf);
-
-        let mut buf = [0u8; 8];
-        tcp_stream.read_exact(&mut buf)?;
-        let timestamp = u64::from_be_bytes(buf);
+        let offset = tcp_stream.read_u64().await?;
+        let timestamp = tcp_stream.read_u64().await?;
 
         Ok(Self {
             offset,
@@ -117,3 +84,4 @@ impl ProducerResult {
         })
     }
 }
+

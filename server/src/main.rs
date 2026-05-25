@@ -1,102 +1,55 @@
-pub mod commit_logger;
+mod commit_log;
+mod ironlog_runtime;
+mod worker;
+mod TaskRunner;
 
-use crate::commit_logger::CommitLogger;
-use ironlog_core::consumer::ConsumerFrame;
+use crate::ironlog_runtime::IronLogRuntime;
+use compio::net::TcpListener;
+use compio_driver::AsRawFd;
 use ironlog_core::{ProducerFrame, ProducerResult, RequestType, WriteStatus};
+use libc;
 use std::io::{Error, ErrorKind, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::os::unix::io::RawFd;
 
-#[cfg(feature = "dhat-heap")]
-#[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
+#[compio::main]
+async fn main() -> std::io::Result<()> {
+    let driver = compio::runtime::Runtime::with_current(|r| r.driver_type());
+    println!("compio driver: {:?}", driver);
+    let commit_log_dir = std::env::args().nth(1).unwrap_or_else(|| { std::env::temp_dir().into_os_string().into_string().unwrap() });
+    println!("commit log dir is {}", commit_log_dir);
+    println!("starting serer with new async everywhere");
+    let ironlog_runtime = IronLogRuntime::new(commit_log_dir).await.expect("IronLogRuntime failed to bootstrap");
 
-fn main() -> std::io::Result<()> {
-    #[cfg(feature = "dhat-heap")]
-    let _profiler = dhat::Profiler::new_heap();
-    
-    println!("server");
-    let mut commit_logger = CommitLogger::new(String::from("/Users/shyamgavulla/ironlog/data")).unwrap();
-    let listener = TcpListener::bind("127.0.0.1:4000")?;
-    for stream in listener.incoming() {
-        let mut stream = stream?;
-        let mut buf = [0u8; 2]; // create a slice of u8 with 2 elements which is 2 bytes
-        stream.read_exact(&mut buf)?;
-        let request_type = u16::from_be_bytes(buf);
-        let request_type = RequestType::try_from(request_type)?;
-        match request_type {
-            RequestType::Produce => { handle_producer(&mut commit_logger, stream)? }
-            RequestType::Fetch => { handle_consumer(&mut commit_logger, stream)? }
-
-            _ => { println!("ack not handled on the server side") } // TODO add custom error message here
+    let listener = TcpListener::bind("0.0.0.0:4000").await?;
+    loop { // this loop is running on the main thread. Until dispatch is called , the main thread will be waiting on the tcp_stream await
+        let (mut tcp_stream, _) = listener.accept().await?; // compio uses io_uring in linux for this.
+        let handshake = ironlog_core::handshake_from_bytes(&mut tcp_stream).await?;
+        // the below code is out of my depth.
+        // the tcp_stream in compio uses Rc which is not Send. std::net::TCPStream is Send and it can be passed safely across threads, but not compio's TCpStream as it enforces share nothing
+        // the tcp stream is nothing but a file descriptor.
+        // the blow code is using unsafe code to duplicate the file descriptor and drop the tcp stream, but the socket is alive because we created a reference to the same underlying kernel socket.
+        // both file descriptors before drop point to the same socker.
+        let raw_fd = tcp_stream.as_raw_fd();
+        let duped = dup_fd(raw_fd)?;
+        drop(tcp_stream); // close original — socket stays alive via the dup
+        let send_result = ironlog_runtime.send_stream_to_worker(duped, handshake);
+        if send_result.is_err() {
+            let error = send_result.unwrap_err();
+            println!("failed to send message to threadn. failed with error {}", error);
         }
     }
 
-    Ok(())
+    // this is dead code ,not called now. But we will call it when we implement shutdown
+    // the threads are already started
+    //ironlog_runtime.join();
 }
-fn handle_consumer(commit_logger: &mut CommitLogger, mut tcp_stream: TcpStream) -> std::io::Result<()> {
 
-    // 1) get the consumer frame from the tcp stream
-    match ConsumerFrame::from_bytes(&mut tcp_stream) {
-        Ok(consumer_frame) => {
-            println!("consumer frame is {:?}", consumer_frame);
-            // read the consumer result from the commit logger from the frame
-            let consumer_result = commit_logger.read_from_commit_log(consumer_frame);
-            match consumer_result {
-                Ok(result) => {
-                    for consumer_result in result {
-                        tcp_stream.write_all(&consumer_result.to_bytes())?;
-                    }
-                    Ok(())
-                }
-                Err(e) => {
-                    println!("not handling the error {} now ", e);
-                    Err(e)
-                }
-            }
-        }
-        Err(e) if e.kind() == ErrorKind::UnexpectedEof => { // eof is returned if the client closes the connection
-            println!("consumer client closed connection, returning with noop");
-            Ok(())
-        }
-        Err(e) => {
-            println!("failed to read from consumer, failed with error {}", e);
-            Err(e)
-        }
+// provided by claude as I was out of depth here .
+// duplicates the file descriptor so that we can reconstruct the stream in the dispatch closure
+fn dup_fd(raw_fd: RawFd) -> std::io::Result<RawFd> {
+    let duped = unsafe { libc::fcntl(raw_fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duped == -1 {
+        return Err(std::io::Error::last_os_error());
     }
-}
-
-fn handle_producer(commit_logger: &mut CommitLogger, mut tcp_stream: TcpStream) -> std::io::Result<()> {
-    loop {
-        // 1) get requestframe from the tcpstream
-        // 2) call the commitlogger to write to a file for the channel
-        match ProducerFrame::from_bytes(&mut tcp_stream) {
-            Ok(request_frame) => {
-                let write_result = commit_logger.write_to_commit_log(request_frame);
-                match write_result {
-                    Ok(result) => { tcp_stream.write_all(&result.to_bytes())?; }
-                    Err(e) => {
-                        write_error(&mut tcp_stream, e)?; // not handing error as the write itself failed to the client.
-                    }
-                }
-            }
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => { // eof is returned if the client closes the connection
-                println!("client closed connection, returning with noop");
-                break;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(())
-}
-
-fn write_error(tcp_stream: &mut TcpStream, e: Error) -> Result<(), Error> {
-    println!("failed with error {:?}", e);
-    let result = ProducerResult {
-        offset: 0,
-        broker_timestamp: 0,
-        status: WriteStatus::Failure,
-        request_type: RequestType::Ack,
-    };
-    tcp_stream.write_all(&result.to_bytes())?;
-    Ok(())
+    Ok(duped)
 }

@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 ironlog_core = { path = "../core", package = "core" }
+compio = { version = "0.18.0", features = ["net", "macros"] }

@@ -1,0 +1,25 @@
+ARG RUST_VERSION=1.95
+
+FROM --platform=$BUILDPLATFORM docker.io/library/rust:${RUST_VERSION} AS build
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y gcc-x86-64-linux-gnu git
+
+RUN rustup target add x86_64-unknown-linux-gnu
+
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
+
+RUN --mount=type=bind,source=.,target=/app \
+    --mount=type=cache,target=/app/target/ \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
+    --mount=type=cache,target=/usr/local/cargo/registry/ \
+    cargo build --locked --release -p server --target x86_64-unknown-linux-gnu && \
+    cp target/x86_64-unknown-linux-gnu/release/server /bin/server
+
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS final
+
+COPY --from=build /bin/server /bin/
+
+EXPOSE 4000
+
+ENTRYPOINT ["/bin/server"]
