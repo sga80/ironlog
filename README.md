@@ -33,7 +33,7 @@ Two versions exist:
 
 ## Read More
 
-- [Approach and philosophy](docs/APPROACH.md) — how the project is structured and the role of AI assistance
+- [Approach and philosophy](docs/APPROACH.md) — how the project is structured and [how I use AI assistance](docs/APPROACH.md#use-of-ai-assistance)
 - [Design v1](docs/DESIGN.md) — synchronous broker design
 - [Design v2](docs/DESIGN_V2.md) — async architecture, io_uring, known limitations, and what comes next
 - [Rust Learning Journal](docs/RUST_JOURNAL.md) — every borrow checker fight, every discovery, in the order they were hit
