@@ -12,7 +12,7 @@ is added.
 
 ## Use of AI Assistance
 
-This project uses Claude (Anthropic) as a guide throughout the build. The collaboration is deliberately structured:
+This project uses Claude (Anthropic) and Gemini (Google) as guides throughout the build. The collaboration is deliberately structured:
 
 - **I write all the code.** Claude does not write code unless explicitly asked for a small reference snippet to unblock
   understanding.
@@ -22,6 +22,12 @@ This project uses Claude (Anthropic) as a guide throughout the build. The collab
   decision logs in `versions/` reflect my thinking, not AI-generated rationale.
 - **The borrow checker fights are real.** Every ownership and lifetime error in this project was hit, understood, and
   fixed by me. That is the point.
+- **Claude handles the surrounding work.** Documentation, capturing learnings from our discussions into the journal,
+  Makefile setup, Kubernetes and Helm configuration, benchmark write-ups — everything that is not the core Rust and
+  systems engineering learning is delegated so the focus stays on what matters.
+- **Gemini was used for deep architectural discussions.** Thread-per-core vs work-stealing, log broker architecture
+  patterns, io_uring internals, and comparisons with Kafka and other brokers — hours of architectural thinking that
+  shaped the design decisions before a line of code was written.
 
 This approach mirrors how a senior engineer might mentor a junior one — the mentor does not write the code for you, they
 help you understand why your approach is wrong and point you toward the right one.
@@ -46,5 +52,4 @@ Building one end-to-end, version by version, is a complete systems engineering e
 
 ## Benchmarking
 
-Each major version is benchmarked against the Alibaba Cloud block storage traces — a real production workload, publicly
-available for research. Results are documented in `benchmarks/`. Numbers drive decisions, not intuition.
+Each major version is benchmarked against the NASA HTTP access log (July 1995) — 1.9M real HTTP request records, publicly available. Results are documented in `versions/`. Numbers drive decisions, not intuition.
