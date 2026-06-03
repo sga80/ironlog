@@ -6,9 +6,12 @@ edition = "2021"
 [profile.release]
 debug = 1
 
+
 [features]
-dhat-heap = []
-dhat-ad-hoc = []
+default = ["splice"]
+splice = []
+
+
 
 [dependencies]
 dhat = "0.3.3"
@@ -16,7 +19,6 @@ ironlog_core = { path = "../core", package = "core" }
 walkdir = "2.5.0"
 compio = { version = "0.18.0", features = ["net", "macros", "dispatcher", "fs"] }
 rustc-hash = "2.1.2"
-compio-driver = "0.11.4"
 libc = "0.2.186"
 flume = "0.12.0"
 

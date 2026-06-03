@@ -6,4 +6,4 @@ edition = "2024"
 [dependencies]
 ironlog_consumer = { path = "../consumer", package = "consumer" }
 ironlog_core = { path = "../core", package = "core" }
-compio = { version = "0.18.0", features = ["net", "macros", "dispatcher"] }
+compio = { version = "0.19.0", features = ["net", "macros", "dispatcher"] }

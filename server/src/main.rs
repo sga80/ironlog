@@ -1,14 +1,13 @@
 mod commit_log;
 mod ironlog_runtime;
 mod worker;
-mod TaskRunner;
+mod task_runner;
 
 use crate::ironlog_runtime::IronLogRuntime;
+use compio::driver::AsRawFd;
 use compio::net::TcpListener;
-use compio_driver::AsRawFd;
-use ironlog_core::{ProducerFrame, ProducerResult, RequestType, WriteStatus};
 use libc;
-use std::io::{Error, ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::os::unix::io::RawFd;
 
 #[compio::main]
@@ -23,6 +22,7 @@ async fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind("0.0.0.0:4000").await?;
     loop { // this loop is running on the main thread. Until dispatch is called , the main thread will be waiting on the tcp_stream await
         let (mut tcp_stream, _) = listener.accept().await?; // compio uses io_uring in linux for this.
+        tcp_stream.set_nodelay(true).expect("except not delay to set");
         let handshake = ironlog_core::handshake_from_bytes(&mut tcp_stream).await?;
         // the below code is out of my depth.
         // the tcp_stream in compio uses Rc which is not Send. std::net::TCPStream is Send and it can be passed safely across threads, but not compio's TCpStream as it enforces share nothing

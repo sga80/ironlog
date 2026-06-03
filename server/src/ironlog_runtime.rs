@@ -30,7 +30,7 @@ impl IronLogRuntime {
             let commit_log_dir = commit_log_dir.clone();
             // spawn a thread and assign a compio runtime
             let handle = std::thread::spawn(|| {
-                let compio_runtime = Runtime::new().expect("compio runtime failed to create ");
+                let compio_runtime = Self::get_compio_runtime();
                 compio_runtime.block_on(async move {
                     let worker = Worker::new(thread_name, commit_log_dir, receiver).await;
                     worker.start_worker().await;
@@ -43,6 +43,24 @@ impl IronLogRuntime {
             thread_to_senders,
             num_cores,
         })
+    }
+    #[cfg(target_os = "linux")]
+    pub fn get_compio_runtime() -> Runtime {
+        // single issuer tells th kernel that the submission queue is used only by thread otherwise kernel things that multiple threads are accessing the queue it adds synchronization
+        //defer_taskrun asks the kernel to defer task work after I/O completion is completion . This tells the kernel to post it into the completion queue , but do not interrupt the task and wait for the task to enter the kernel.
+        // this basically provides batching and when the task enters kernel it has a batch of completions. This is possible in TPC with single_issuer because there is only one thread .
+        // let mut proactor_builder = compio::driver::ProactorBuilder::new();
+        // proactor_builder.single_issuer(true);
+        // Runtime::builder()
+        //     .with_proactor(proactor_builder)
+        //     .build()
+        //     .expect("compio runtime failed to create")
+        Runtime::new().expect("compio runtime failed to create ")
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn get_compio_runtime() -> Runtime {
+        Runtime::new().expect("compio runtime failed to create ")
     }
     pub fn send_stream_to_worker(&self, raw_fd: RawFd, handshake: Handshake) -> Result<(), Error> {
         let mut hasher = FxHasher::default();

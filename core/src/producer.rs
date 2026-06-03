@@ -3,6 +3,7 @@ use compio::io::AsyncReadExt;
 use compio::net::TcpStream;
 use compio::BufResult;
 
+// used by the producer clis and clients.
 #[derive(Clone, Debug)]
 pub struct ProducerFrame {
     pub payload_type: PayloadType,
@@ -43,6 +44,36 @@ impl ProducerFrame {
         Ok(Self {
             payload_type,
             payload,
+        })
+    }
+}
+
+pub struct ServerProducerFrame {
+    payload_type: PayloadType,
+    payload_length: u32,
+}
+impl ServerProducerFrame {
+    pub fn payload_type(&self) -> PayloadType {
+        self.payload_type
+    }
+    pub fn payload_length(&self) -> u32 {
+        self.payload_length
+    }
+    pub fn new(payload_type: PayloadType, payload_length: u32) -> Self {
+        ServerProducerFrame {
+            payload_type,
+            payload_length,
+        }
+    }
+    pub async fn from_bytes(tcp_stream: &mut TcpStream) -> std::io::Result<Self> {
+        //| 4 bytes: length | 2 bytes: payload type 
+        // 1) read the first bytes to get the length
+        let payload_length = tcp_stream.read_u32().await?; // we are using big endian here to represent u32 over the wire. we could also use little endian but BE is easier to read left to write
+        let payload_type = tcp_stream.read_u16().await?; // read the next 2 bytes as payload type
+        let payload_type = PayloadType::try_from(payload_type)?;
+        Ok(Self {
+            payload_type,
+            payload_length,
         })
     }
 }

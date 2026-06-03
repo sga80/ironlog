@@ -147,3 +147,67 @@ The natural instinct for shared mutable state in async Rust is `Rc<RefCell<T>>` 
 **The lesson:** With positional writes, you are responsible for tracking the byte offset. After a successful `write_at`, increment your tracked offset by `bytes.len()`. On restart, scan the file from offset 0, accumulate byte positions as you read each record, and resume from the end. Assign the returned position (`byte_offset = cr.1`), do not add it (`byte_offset += cr.1` double-counts).
 
 **Where I hit it:** Two separate bugs. First: after a server restart, new records were overwriting the end of the file because `byte_offset` was not restored correctly on startup. Second: the consumer was skipping records because `byte_offset += cr.1` was adding a cumulative position to itself — after three records the offset jumped past the fourth record entirely.
+
+---
+
+# v3 — Zero-Copy, Two-File Format, O(1) Seek
+
+## `#[cfg]` — Compile-Time Platform Branching
+
+Rust's `#[cfg]` attribute lets you include or exclude code at compile time based on the target platform, OS, architecture, or custom flags. Unlike a runtime `if` check, the excluded branch does not exist in the binary at all.
+
+**The lesson:** Two functions can share the same name and signature but target different platforms using `#[cfg]`. The compiler picks exactly one based on the build target — the other is as if it was never written. This is how platform-specific optimisations are handled idiomatically in Rust without polluting the call site with conditional logic.
+
+```rust
+#[cfg(target_os = "linux")]
+async fn write_payload(...) {
+    // splice — zero-copy, Linux only
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn write_payload(...) {
+    // read into buffer + write_at — fallback for macOS/other
+}
+```
+
+Common `#[cfg]` targets:
+- `target_os = "linux"` / `"macos"` / `"windows"` — operating system
+- `target_arch = "x86_64"` / `"aarch64"` — CPU architecture
+- `target_env = "gnu"` / `"musl"` — libc environment
+- `feature = "my_feature"` — Cargo feature flags
+- Custom aliases defined in `build.rs` via `cfg_aliases!` (e.g. Compio uses `linux_all` to mean `target_os = "linux" || target_os = "android"`)
+
+**Where I hit it:** `splice()` in Compio is only compiled on Linux (`#[cfg(linux_all)]`). On macOS, the import doesn't resolve. The fix is two `write_payload` implementations — splice on Linux, buffer-based fallback elsewhere — with the same call site in `write_to_commit_log`.
+
+---
+
+## Cargo Features — Compile-Time Feature Toggles
+
+Cargo features are named flags declared in `Cargo.toml` that act as compile-time toggles. Code guarded by a feature flag is not compiled at all if the feature is not enabled — it does not exist in the binary, not even as dead code.
+
+**The lesson:** Features let you ship one codebase that behaves differently depending on build configuration, with zero runtime cost for the inactive path. Combined with `#[cfg(target_os)]`, you can express conditions like "only if Linux AND the splice feature is enabled."
+
+```rust
+// Cargo.toml
+[features]
+default = ["splice"]  // on by default; omit to disable
+splice = []
+
+// code
+#[cfg(all(target_os = "linux", feature = "splice"))]
+async fn write_payload_to_stream(...) {
+    // splice path — compiled only on Linux with feature enabled
+}
+
+#[cfg(not(all(target_os = "linux", feature = "splice")))]
+async fn write_payload_to_stream(...) {
+    // buffered fallback — compiled everywhere else
+}
+```
+
+Build commands:
+- `cargo build --release` — uses defaults (splice on)
+- `cargo build --release --no-default-features` — splice off
+- `cargo build --release --features splice` — splice explicitly on
+
+**Where I hit it:** Adding the `splice` Cargo feature to toggle between zero-copy splice and buffered I/O at compile time, so both paths could be benchmarked independently on EKS without changing code.

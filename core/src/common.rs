@@ -23,8 +23,9 @@ impl TryFrom<u16> for RequestType {
     }
 }
 #[repr(u16)] // represent as u16 in memory as Request type is 2 bytes
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, Default)]
 pub enum PayloadType {
+    #[default]
     Text = 1,
     Json = 2,
     Binary = 3,

@@ -6,4 +6,4 @@ edition = "2021"
 [dependencies]
 ironlog_producer = { path = "../producer", package = "producer" }
 ironlog_core = { path = "../core", package = "core" }
-compio = { version = "0.18.0", features = ["net", "macros", "dispatcher"] }
+compio = { version = "0.19.0", features = ["net", "macros", "dispatcher"] }
