@@ -54,6 +54,7 @@ Two versions exist:
   and [how I use AI assistance](docs/APPROACH.md#use-of-ai-assistance)
 - [Design v1](docs/DESIGN.md) - synchronous broker design
 - [Design v2](docs/DESIGN_V2.md) - async architecture, io_uring, known limitations, and what comes next
+- [Design v3](docs/DESIGN_V3.md) - Zero-copy for read and write path
 - [Rust Learning Journal](docs/RUST_JOURNAL.md) - every borrow checker fight, every discovery, in the order they were
   hit
 - [v1 Benchmark Results](docs/versions/v1.md)
